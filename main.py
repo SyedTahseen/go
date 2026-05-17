@@ -777,14 +777,14 @@ async def test_keys(client: Client, message: Message):
                 status = "OK" if text else "No response"
             except Exception as e:
                 status = f"ERROR: {e.__class__.__name__}: {str(e)[:80]}"
-            result_lines.append(f"{idx + 1}. {key[:10]}... → {status}")
+            result_lines.append(f"{idx + 1}. {key[:10]}... â†’ {status}")
         result_text = "\n".join(result_lines)
         file_path = "gemini_test_results.txt"
         await asyncio.to_thread(_sync_write_file, file_path, result_text)
         await client.send_document(
             chat_id=message.chat.id,
             document=file_path,
-            caption="✅ Gemini API key test results"
+            caption="âœ… Gemini API key test results"
         )
         await message.delete()
     except Exception as e:
