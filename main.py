@@ -126,7 +126,7 @@ async def reply_worker(client):
                     os.remove(cleanup_file)
                 except Exception:
                     pass
-        await asyncio.sleep(2.1)
+        await asyncio.sleep(1)
 
 def ensure_reply_worker(client):
     global reply_worker_started
@@ -182,19 +182,29 @@ async def handle_gpic_message(client, chat_id, bot_response):
         return True
     return False
 
+_roles_cache = None
+_roles_cache_time = 0
+ROLES_CACHE_TTL = 300  # seconds
+
 async def fetch_roles():
+    global _roles_cache, _roles_cache_time
+    now = time.time()
+    if _roles_cache is not None and (now - _roles_cache_time) < ROLES_CACHE_TTL:
+        return _roles_cache
     try:
         roles = await asyncio.to_thread(_fetch_roles_sync)
         if isinstance(roles, dict):
             default_role_name = db.get(settings_collection, "default_role") or "default"
             if default_role_name in roles:
                 roles["default"] = roles[default_role_name]
+            _roles_cache = roles
+            _roles_cache_time = now
             return roles
-        return {}
+        return _roles_cache or {}
     except requests.exceptions.RequestException:
-        return {}
+        return _roles_cache or {}
     except Exception:
-        return {}
+        return _roles_cache or {}
 
 def build_system_instruction(bot_role):
     if isinstance(bot_role, list):
@@ -266,25 +276,22 @@ async def send_typing_action(client, chat_id, user_message):
         return
 
 async def handle_voice_message(client, chat_id, bot_response):
+    if not isinstance(bot_response, str) or not bot_response.startswith(".el"):
+        return False
     voice_generation_enabled = get_voice_generation_enabled()
+    text = bot_response[3:].strip()
     if not voice_generation_enabled:
-        if isinstance(bot_response, str) and bot_response.startswith(".el"):
-            bot_response = bot_response[3:].strip()
-        await send_reply(client.send_message, [chat_id, bot_response], {}, client)
+        await send_reply(client.send_message, [chat_id, text], {}, client)
         return True
-    if isinstance(bot_response, str) and bot_response.startswith(".el"):
-        try:
-            audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
-            if audio_path and os.path.exists(audio_path):
-                await send_reply(client.send_voice, [chat_id], {"voice": audio_path, "cleanup_file": audio_path}, client)
-                return True
-            else:
-                await send_reply(client.send_message, [chat_id, bot_response[3:].strip()], {}, client)
-                return True
-        except Exception:
-            await send_reply(client.send_message, [chat_id, bot_response[3:].strip()], {}, client)
-            return True
-    return False
+    try:
+        audio_path = await generate_elevenlabs_audio(text=text)
+        if audio_path and os.path.exists(audio_path):
+            await send_reply(client.send_voice, [chat_id], {"voice": audio_path, "cleanup_file": audio_path}, client)
+        else:
+            await send_reply(client.send_message, [chat_id, text], {}, client)
+    except Exception:
+        await send_reply(client.send_message, [chat_id, text], {}, client)
+    return True
 
 sticker_gif_buffer = defaultdict(list)
 sticker_gif_timer = {}
@@ -387,8 +394,7 @@ async def gchat(client: Client, message: Message):
                     current_key = gemini_keys[current_key_index]
                     genai.configure(api_key=current_key)
                     prompt = build_prompt(chat_history, combined_message)
-                    async with GEMINI_SEMAPHORE:
-                        bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
+                    bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
                     if not bot_response:
                         bot_response = ""
                     if await handle_gpic_message(client, message.chat.id, bot_response):
@@ -439,6 +445,7 @@ async def handle_files(client: Client, message: Message):
             image_path = await client.download_media(message.photo)
             client.image_buffer[user_id].append(image_path)
             if client.image_timers.get(user_id) is None:
+                client.image_timers[user_id] = True  # sentinel to block duplicate tasks
                 async def process_images():
                     try:
                         await asyncio.sleep(10)
