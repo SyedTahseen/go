@@ -29,6 +29,10 @@ generation_config = {
     "max_output_tokens": 40,
 }
 
+media_generation_config = {
+    "max_output_tokens": 300,
+}
+
 DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 _gemini_model_cache = None
 
@@ -196,30 +200,39 @@ async def fetch_roles():
     except Exception:
         return {}
 
-def build_prompt(bot_role, chat_history, user_message):
-    timestamp = datetime.datetime.now(la_timezone).strftime("%Y-%m-%d %H:%M:%S")
+def build_system_instruction(bot_role):
     if isinstance(bot_role, list):
         role_text = "\n".join(bot_role)
     else:
         role_text = str(bot_role)
+    return role_text
+
+def build_prompt(chat_history, user_message):
+    timestamp = datetime.datetime.now(la_timezone).strftime("%Y-%m-%d %H:%M:%S")
     chat_context = "\n".join(chat_history)
     prompt = (
         f"Current Time: {timestamp}\n"
-        f"Role:\n{role_text}\n"
-        f"Chat History:\n{chat_context}\n"
-        f"User Message:\n{user_message}"
+        f"Chat History:\n{chat_context}"
     )
     return prompt
 
-async def generate_gemini_response(input_data, chat_history, user_id):
+async def generate_gemini_response(input_data, chat_history, user_id, bot_role=None):
     retries = 3
     gemini_keys = db.get(settings_collection, "gemini_keys") or [gemini_key]
     current_key_index = db.get(settings_collection, "current_key_index") or 0
+    # Use higher token limit when sending media (input_data is a list with non-string items)
+    is_media = isinstance(input_data, list) and any(not isinstance(x, str) for x in input_data)
+    gen_config = media_generation_config if is_media else generation_config
+    system_instruction = build_system_instruction(bot_role) if bot_role else None
     while retries > 0:
         try:
             current_key = gemini_keys[current_key_index]
             genai.configure(api_key=current_key)
-            model = genai.GenerativeModel(get_gemini_model(), generation_config=generation_config)
+            model = genai.GenerativeModel(
+                get_gemini_model(),
+                generation_config=gen_config,
+                system_instruction=system_instruction,
+            )
             model.safety_settings = safety_settings
             async with GEMINI_SEMAPHORE:
                 response = await asyncio.to_thread(model.generate_content, input_data)
@@ -315,10 +328,10 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                 return
             bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
             chat_history = get_chat_history(user_id, "hello", user_name)
-            prompt = build_prompt(bot_role, chat_history, "hello")
+            prompt = build_prompt(chat_history, "hello")
             await send_typing_action(client, message.chat.id, "hello")
             try:
-                bot_response = await generate_gemini_response(prompt, chat_history, user_id)
+                bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
                 if not bot_response:
                     await send_reply(client.send_message, ["me", f"Gemini returned empty response for user {user_id}"], {}, client)
                 else:
@@ -380,19 +393,13 @@ async def gchat(client: Client, message: Message):
                 try:
                     current_key = gemini_keys[current_key_index]
                     genai.configure(api_key=current_key)
-                    model = genai.GenerativeModel(get_gemini_model(), generation_config=generation_config)
-                    model.safety_settings = safety_settings
-                    prompt = build_prompt(bot_role, chat_history, combined_message)
-                    chat = model.start_chat()
+                    prompt = build_prompt(chat_history, combined_message)
                     async with GEMINI_SEMAPHORE:
-                        response = await asyncio.to_thread(chat.send_message, prompt)
-                    bot_response = response.text.strip() if getattr(response, "text", None) else ""
+                        bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
+                    if not bot_response:
+                        bot_response = ""
                     if await handle_gpic_message(client, message.chat.id, bot_response):
                         return
-                    if bot_response:
-                        full_history = db.get(history_collection, f"chat_history.{user_id}") or []
-                        full_history.append(bot_response)
-                        db.set(history_collection, f"chat_history.{user_id}", full_history)
                     if await handle_voice_message(client, message.chat.id, bot_response):
                         return
                     if len(bot_response) > 4000:
@@ -431,11 +438,11 @@ async def handle_files(client: Client, message: Message):
             return
         bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
         caption = message.caption.strip() if message.caption else ""
-        chat_history = get_chat_history(user_id, caption, user_name)
         if not hasattr(client, "image_buffer"):
             client.image_buffer = defaultdict(list)
             client.image_timers = {}
         if message.photo:
+            chat_history = get_chat_history(user_id, caption or "[image]", user_name)
             image_path = await client.download_media(message.photo)
             client.image_buffer[user_id].append(image_path)
             if client.image_timers.get(user_id) is None:
@@ -457,10 +464,10 @@ async def handle_files(client: Client, message: Message):
                             if not sample_images:
                                 await send_reply(client.send_message, ["me", "No valid images to process."], {}, client)
                                 return
-                            prompt_text = "User sent multiple images." + (f" Caption: {caption}" if caption else "")
-                            prompt = build_prompt(bot_role, chat_history, prompt_text)
+                            prompt_text = "User sent image(s)." + (f" Caption: {caption}" if caption else " React to the image(s) naturally, in character.")
+                            prompt = build_prompt(chat_history, prompt_text)
                             input_data = [prompt] + sample_images
-                            response = await generate_gemini_response(input_data, chat_history, user_id)
+                            response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
                             if response and await handle_gpic_message(client, message.chat.id, response):
                                 return
                             if response and await handle_voice_message(client, message.chat.id, response):
@@ -500,16 +507,17 @@ async def handle_files(client: Client, message: Message):
         elif message.document:
             file_type, file_path = "document", await client.download_media(message.document)
         if file_path and file_type:
+            chat_history = get_chat_history(user_id, caption or f"[{file_type}]", user_name)
             try:
                 uploaded_file = await upload_file_to_gemini(file_path, file_type)
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"upload_file_to_gemini error:\n\n{str(e)}"], {}, client)
                 return
-            prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else "")
-            prompt = build_prompt(bot_role, chat_history, prompt_text)
+            prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else f" React to it naturally, in character.")
+            prompt = build_prompt(chat_history, prompt_text)
             input_data = [prompt, uploaded_file]
             try:
-                response = await generate_gemini_response(input_data, chat_history, user_id)
+                response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"generate_gemini_response error:\n\n{str(e)}"], {}, client)
                 return
