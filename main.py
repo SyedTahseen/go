@@ -83,6 +83,9 @@ def set_gemini_model(model_name: str):
     db.set("custom.gsettings", "gemini_model", model_name)
     _gemini_model_cache = model_name
 
+model = genai.GenerativeModel(get_gemini_model(), generation_config=generation_config)
+model.safety_settings = safety_settings
+
 history_collection = "custom.gchat"
 settings_collection = "custom.gsettings"
 enabled_users = db.get(settings_collection, "enabled_users") or []
@@ -96,7 +99,7 @@ BOT_PIC_GROUP_ID = -1001234567890
 GEMINI_SEMAPHORE = asyncio.Semaphore(4)
 
 reply_queue = asyncio.Queue()
-_reply_worker_task = None
+reply_worker_started = False
 
 async def reply_worker(client):
     while True:
@@ -126,9 +129,10 @@ async def reply_worker(client):
         await asyncio.sleep(1)
 
 def ensure_reply_worker(client):
-    global _reply_worker_task
-    if _reply_worker_task is None or _reply_worker_task.done():
-        _reply_worker_task = asyncio.create_task(reply_worker(client))
+    global reply_worker_started
+    if not reply_worker_started:
+        asyncio.create_task(reply_worker(client))
+        reply_worker_started = True
 
 async def send_reply(reply_func, args, kwargs, client):
     ensure_reply_worker(client)
@@ -238,12 +242,8 @@ async def generate_gemini_response(input_data, chat_history, user_id, bot_role=N
             text = getattr(response, "text", None)
             bot_response = text.strip() if isinstance(text, str) else ""
             if bot_response:
-                max_head, max_tail = get_history_limits()
-                max_total = max_head + max_tail
                 full_history = db.get(history_collection, f"chat_history.{user_id}") or []
                 full_history.append(bot_response)
-                if len(full_history) > max_total:
-                    full_history = full_history[-max_total:]
                 db.set(history_collection, f"chat_history.{user_id}", full_history)
             return bot_response
         except Exception as e:
@@ -254,7 +254,6 @@ async def generate_gemini_response(input_data, chat_history, user_id, bot_role=N
                 await asyncio.sleep(4)
             else:
                 raise e
-    return ""
 
 MIME_TYPE_MAP = {
     "video": "video/mp4",
@@ -371,6 +370,12 @@ async def gchat(client: Client, message: Message):
         user_message = message.text.strip()
         if user_id in disabled_users or (not gchat_for_all and user_id not in enabled_users):
             return
+        roles = await fetch_roles()
+        default_role = roles.get("default")
+        if not default_role:
+            await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
+            return
+        bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
         if not hasattr(client, "message_buffer"):
             client.message_buffer = {}
             client.message_timers = {}
@@ -387,33 +392,41 @@ async def gchat(client: Client, message: Message):
             if not buffered_messages:
                 return
             combined_message = " ".join(buffered_messages)
-            # Re-read bot_role at fire time so role changes mid-buffer take effect
-            _roles = await fetch_roles()
-            _default_role = _roles.get("default")
-            if not _default_role:
-                await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
-                return
-            _bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or _default_role
             chat_history = get_chat_history(user_id, combined_message, user_name)
             await asyncio.sleep(random.choice([3, 5, 7]))
             await send_typing_action(client, message.chat.id, combined_message)
-            prompt = build_prompt(chat_history, combined_message)
-            try:
-                bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=_bot_role)
-                if not bot_response:
+            gemini_keys = db.get(settings_collection, "gemini_keys") or [gemini_key]
+            current_key_index = db.get(settings_collection, "current_key_index") or 0
+            retries = len(gemini_keys) * 2
+            while retries > 0:
+                try:
+                    current_key = gemini_keys[current_key_index]
+                    genai.configure(api_key=current_key)
+                    prompt = build_prompt(chat_history, combined_message)
+                    bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
+                    if not bot_response:
+                        return
+                    if await handle_gpic_message(client, message.chat.id, bot_response):
+                        return
+                    if await handle_voice_message(client, message.chat.id, bot_response):
+                        return
+                    if len(bot_response) > 4000:
+                        fp = f"gchat_resp_{user_id}_{int(time.time())}.txt"
+                        await asyncio.to_thread(_sync_write_file, fp, bot_response)
+                        await send_reply(client.send_document, [message.chat.id, fp], {"caption": "Response", "reply_to_message_id": message.id, "cleanup_file": fp}, client)
+                    else:
+                        await send_reply(message.reply_text, [bot_response], {}, client)
                     return
-                if await handle_gpic_message(client, message.chat.id, bot_response):
-                    return
-                if await handle_voice_message(client, message.chat.id, bot_response):
-                    return
-                if len(bot_response) > 4000:
-                    fp = f"gchat_resp_{user_id}_{int(time.time())}.txt"
-                    await asyncio.to_thread(_sync_write_file, fp, bot_response)
-                    await send_reply(client.send_document, [message.chat.id, fp], {"caption": "Response", "reply_to_message_id": message.id, "cleanup_file": fp}, client)
-                else:
-                    await send_reply(message.reply_text, [bot_response], {}, client)
-            except Exception as e:
-                await send_reply(client.send_message, ["me", f"gchat error:\n\n{str(e)}"], {}, client)
+                except Exception as e:
+                    if "429" in str(e) or "invalid" in str(e).lower() or "403" in str(e) or "suspended" in str(e).lower():
+                        retries -= 1
+                        if retries % 2 == 0:
+                            current_key_index = (current_key_index + 1) % len(gemini_keys)
+                            db.set(settings_collection, "current_key_index", current_key_index)
+                        await asyncio.sleep(4)
+                    else:
+                        await send_reply(client.send_message, ["me", f"gchat error:\n\n{str(e)}"], {}, client)
+                        return
         client.message_timers[user_id] = asyncio.create_task(process_combined_messages())
     except Exception as e:
         await send_reply(client.send_message, ["me", f"gchat module error:\n\n{str(e)}"], {}, client)
@@ -433,9 +446,6 @@ async def handle_files(client: Client, message: Message):
             return
         bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
         caption = message.caption.strip() if message.caption else ""
-        if not any([message.photo, message.video, message.video_note,
-                    message.audio, message.voice, message.document]):
-            return
         if not hasattr(client, "image_buffer"):
             client.image_buffer = defaultdict(list)
             client.image_timers = {}
@@ -499,10 +509,8 @@ async def handle_files(client: Client, message: Message):
         file_type = None
         if message.video or message.video_note:
             file_type, file_path = "video", await client.download_media(message.video or message.video_note)
-        elif message.voice:
-            file_type, file_path = "voice", await client.download_media(message.voice)
-        elif message.audio:
-            file_type, file_path = "audio", await client.download_media(message.audio)
+        elif message.audio or message.voice:
+            file_type, file_path = "audio", await client.download_media(message.audio or message.voice)
         elif message.document and message.document.file_name.endswith(".pdf"):
             file_type, file_path = "pdf", await client.download_media(message.document)
         elif message.document:
