@@ -126,7 +126,7 @@ async def reply_worker(client):
                     os.remove(cleanup_file)
                 except Exception:
                     pass
-        await asyncio.sleep(1)
+        await asyncio.sleep(2.1)
 
 def ensure_reply_worker(client):
     global reply_worker_started
@@ -182,60 +182,44 @@ async def handle_gpic_message(client, chat_id, bot_response):
         return True
     return False
 
-_roles_cache = None
-_roles_cache_time = 0
-ROLES_CACHE_TTL = 300  # seconds
-
 async def fetch_roles():
-    global _roles_cache, _roles_cache_time
-    now = time.time()
-    if _roles_cache is not None and (now - _roles_cache_time) < ROLES_CACHE_TTL:
-        return _roles_cache
     try:
         roles = await asyncio.to_thread(_fetch_roles_sync)
         if isinstance(roles, dict):
             default_role_name = db.get(settings_collection, "default_role") or "default"
             if default_role_name in roles:
                 roles["default"] = roles[default_role_name]
-            _roles_cache = roles
-            _roles_cache_time = now
             return roles
-        return _roles_cache or {}
+        return {}
     except requests.exceptions.RequestException:
-        return _roles_cache or {}
+        return {}
     except Exception:
-        return _roles_cache or {}
+        return {}
 
-def build_system_instruction(bot_role):
+def build_prompt(bot_role, chat_history, user_message):
+    timestamp = datetime.datetime.now(la_timezone).strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(bot_role, list):
         role_text = "\n".join(bot_role)
     else:
         role_text = str(bot_role)
-    return role_text
-
-def build_prompt(chat_history, user_message):
-    timestamp = datetime.datetime.now(la_timezone).strftime("%Y-%m-%d %H:%M:%S")
     chat_context = "\n".join(chat_history)
     prompt = (
         f"Current Time: {timestamp}\n"
-        f"Chat History:\n{chat_context}"
+        f"Role:\n{role_text}\n"
+        f"Chat History:\n{chat_context}\n"
+        f"User Message:\n{user_message}"
     )
     return prompt
 
-async def generate_gemini_response(input_data, chat_history, user_id, bot_role=None):
+async def generate_gemini_response(input_data, chat_history, user_id):
     retries = 3
     gemini_keys = db.get(settings_collection, "gemini_keys") or [gemini_key]
     current_key_index = db.get(settings_collection, "current_key_index") or 0
-    system_instruction = build_system_instruction(bot_role) if bot_role else None
     while retries > 0:
         try:
             current_key = gemini_keys[current_key_index]
             genai.configure(api_key=current_key)
-            model = genai.GenerativeModel(
-                get_gemini_model(),
-                generation_config=generation_config,
-                system_instruction=system_instruction,
-            )
+            model = genai.GenerativeModel(get_gemini_model(), generation_config=generation_config)
             model.safety_settings = safety_settings
             async with GEMINI_SEMAPHORE:
                 response = await asyncio.to_thread(model.generate_content, input_data)
@@ -276,22 +260,25 @@ async def send_typing_action(client, chat_id, user_message):
         return
 
 async def handle_voice_message(client, chat_id, bot_response):
-    if not isinstance(bot_response, str) or not bot_response.startswith(".el"):
-        return False
     voice_generation_enabled = get_voice_generation_enabled()
-    text = bot_response[3:].strip()
     if not voice_generation_enabled:
-        await send_reply(client.send_message, [chat_id, text], {}, client)
+        if isinstance(bot_response, str) and bot_response.startswith(".el"):
+            bot_response = bot_response[3:].strip()
+        await send_reply(client.send_message, [chat_id, bot_response], {}, client)
         return True
-    try:
-        audio_path = await generate_elevenlabs_audio(text=text)
-        if audio_path and os.path.exists(audio_path):
-            await send_reply(client.send_voice, [chat_id], {"voice": audio_path, "cleanup_file": audio_path}, client)
-        else:
-            await send_reply(client.send_message, [chat_id, text], {}, client)
-    except Exception:
-        await send_reply(client.send_message, [chat_id, text], {}, client)
-    return True
+    if isinstance(bot_response, str) and bot_response.startswith(".el"):
+        try:
+            audio_path = await generate_elevenlabs_audio(text=bot_response[3:])
+            if audio_path and os.path.exists(audio_path):
+                await send_reply(client.send_voice, [chat_id], {"voice": audio_path, "cleanup_file": audio_path}, client)
+                return True
+            else:
+                await send_reply(client.send_message, [chat_id, bot_response[3:].strip()], {}, client)
+                return True
+        except Exception:
+            await send_reply(client.send_message, [chat_id, bot_response[3:].strip()], {}, client)
+            return True
+    return False
 
 sticker_gif_buffer = defaultdict(list)
 sticker_gif_timer = {}
@@ -328,10 +315,10 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                 return
             bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
             chat_history = get_chat_history(user_id, "hello", user_name)
-            prompt = build_prompt(chat_history, "hello")
+            prompt = build_prompt(bot_role, chat_history, "hello")
             await send_typing_action(client, message.chat.id, "hello")
             try:
-                bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
+                bot_response = await generate_gemini_response(prompt, chat_history, user_id)
                 if not bot_response:
                     await send_reply(client.send_message, ["me", f"Gemini returned empty response for user {user_id}"], {}, client)
                 else:
@@ -393,12 +380,19 @@ async def gchat(client: Client, message: Message):
                 try:
                     current_key = gemini_keys[current_key_index]
                     genai.configure(api_key=current_key)
-                    prompt = build_prompt(chat_history, combined_message)
-                    bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
-                    if not bot_response:
-                        bot_response = ""
+                    model = genai.GenerativeModel(get_gemini_model(), generation_config=generation_config)
+                    model.safety_settings = safety_settings
+                    prompt = build_prompt(bot_role, chat_history, combined_message)
+                    chat = model.start_chat()
+                    async with GEMINI_SEMAPHORE:
+                        response = await asyncio.to_thread(chat.send_message, prompt)
+                    bot_response = response.text.strip() if getattr(response, "text", None) else ""
                     if await handle_gpic_message(client, message.chat.id, bot_response):
                         return
+                    if bot_response:
+                        full_history = db.get(history_collection, f"chat_history.{user_id}") or []
+                        full_history.append(bot_response)
+                        db.set(history_collection, f"chat_history.{user_id}", full_history)
                     if await handle_voice_message(client, message.chat.id, bot_response):
                         return
                     if len(bot_response) > 4000:
@@ -437,15 +431,14 @@ async def handle_files(client: Client, message: Message):
             return
         bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
         caption = message.caption.strip() if message.caption else ""
+        chat_history = get_chat_history(user_id, caption, user_name)
         if not hasattr(client, "image_buffer"):
             client.image_buffer = defaultdict(list)
             client.image_timers = {}
         if message.photo:
-            chat_history = get_chat_history(user_id, caption or "[image]", user_name)
             image_path = await client.download_media(message.photo)
             client.image_buffer[user_id].append(image_path)
             if client.image_timers.get(user_id) is None:
-                client.image_timers[user_id] = True  # sentinel to block duplicate tasks
                 async def process_images():
                     try:
                         await asyncio.sleep(10)
@@ -464,10 +457,10 @@ async def handle_files(client: Client, message: Message):
                             if not sample_images:
                                 await send_reply(client.send_message, ["me", "No valid images to process."], {}, client)
                                 return
-                            prompt_text = "User sent image(s)." + (f" Caption: {caption}" if caption else " React to the image(s) naturally, in character.")
-                            prompt = build_prompt(chat_history, prompt_text)
+                            prompt_text = "User sent multiple images." + (f" Caption: {caption}" if caption else "")
+                            prompt = build_prompt(bot_role, chat_history, prompt_text)
                             input_data = [prompt] + sample_images
-                            response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
+                            response = await generate_gemini_response(input_data, chat_history, user_id)
                             if response and await handle_gpic_message(client, message.chat.id, response):
                                 return
                             if response and await handle_voice_message(client, message.chat.id, response):
@@ -507,17 +500,16 @@ async def handle_files(client: Client, message: Message):
         elif message.document:
             file_type, file_path = "document", await client.download_media(message.document)
         if file_path and file_type:
-            chat_history = get_chat_history(user_id, caption or f"[{file_type}]", user_name)
             try:
                 uploaded_file = await upload_file_to_gemini(file_path, file_type)
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"upload_file_to_gemini error:\n\n{str(e)}"], {}, client)
                 return
-            prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else f" React to it naturally, in character.")
-            prompt = build_prompt(chat_history, prompt_text)
+            prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else "")
+            prompt = build_prompt(bot_role, chat_history, prompt_text)
             input_data = [prompt, uploaded_file]
             try:
-                response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
+                response = await generate_gemini_response(input_data, chat_history, user_id)
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"generate_gemini_response error:\n\n{str(e)}"], {}, client)
                 return
