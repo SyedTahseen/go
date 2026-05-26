@@ -255,8 +255,17 @@ async def generate_gemini_response(input_data, chat_history, user_id, bot_role=N
             else:
                 raise e
 
+MIME_TYPE_MAP = {
+    "video": "video/mp4",
+    "audio": "audio/mpeg",
+    "voice": "audio/ogg",
+    "pdf": "application/pdf",
+    "document": "application/octet-stream",
+}
+
 async def upload_file_to_gemini(file_path, file_type):
-    uploaded_file = await asyncio.to_thread(genai.upload_file, file_path)
+    mime_type = MIME_TYPE_MAP.get(file_type, "application/octet-stream")
+    uploaded_file = await asyncio.to_thread(genai.upload_file, file_path, mime_type=mime_type)
     while uploaded_file.state.name == "PROCESSING":
         await asyncio.sleep(10)
         uploaded_file = await asyncio.to_thread(genai.get_file, uploaded_file.name)
