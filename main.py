@@ -396,7 +396,7 @@ async def gchat(client: Client, message: Message):
                     prompt = build_prompt(chat_history, combined_message)
                     bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
                     if not bot_response:
-                        bot_response = ""
+                        return
                     if await handle_gpic_message(client, message.chat.id, bot_response):
                         return
                     if await handle_voice_message(client, message.chat.id, bot_response):
