@@ -19,18 +19,18 @@ add_vps() {
     USERNAME="$2"
     SERVER_IP="$3"
     PRIVATE_KEY="$4"
-
-    KEY_FILE="$SSH_DIR/${SERVER_NAME}_key"
-
-    # Save private key
-    echo "$PRIVATE_KEY" > "$KEY_FILE"
-    chmod 600 "$KEY_FILE"
+    PASSWORD="$5"   # optional
 
     # Remove old config if exists
-    sed -i "/Host $SERVER_NAME/,+5d" "$CONFIG_FILE"
+    sed -i "/Host $SERVER_NAME/,+6d" "$CONFIG_FILE"
 
-    # Add SSH config
-    cat >> "$CONFIG_FILE" <<EOF
+    if [ -n "$PRIVATE_KEY" ]; then
+        # Key-based server (original behavior)
+        KEY_FILE="$SSH_DIR/${SERVER_NAME}_key"
+        echo "$PRIVATE_KEY" > "$KEY_FILE"
+        chmod 600 "$KEY_FILE"
+
+        cat >> "$CONFIG_FILE" <<EOF
 
 Host $SERVER_NAME
     HostName $SERVER_IP
@@ -40,49 +40,51 @@ Host $SERVER_NAME
     UserKnownHostsFile /dev/null
 
 EOF
+        echo "[ADDED] $SERVER_NAME (key-based)"
 
-    echo "[ADDED] $SERVER_NAME"
+    elif [ -n "$PASSWORD" ]; then
+        # Password-based server using sshpass
+        cat >> "$CONFIG_FILE" <<EOF
+
+Host $SERVER_NAME
+    HostName $SERVER_IP
+    User $USERNAME
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    ProxyCommand sshpass -p '$PASSWORD' ssh -o StrictHostKeyChecking=no -W %h:%p $USERNAME@$SERVER_IP
+
+EOF
+        echo "[ADDED] $SERVER_NAME (password-based)"
+    else
+        echo "ERROR: Either PRIVATE_KEY or PASSWORD must be provided!"
+    fi
 }
 
 # ==========================================
-# VPS 1
+# VPS 1 (key-based)
 # ==========================================
-
 add_vps \
 "instance1" \
 "ubuntu" \
 "141.148.43.81" \
 '-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEArtAZ2S8/odHZyppwg/QxC9M4Qkp+IFbFK1Io00UwDx1EOLI3
-TzcSpevfhfLg4gOKnEJjes+SfttUcZJzAHIjiZhHRQcIfYdskuEtycTrn3GM7gx9
-gTfJPfUrRkE3tkzSdXLlz1DIUUvp4KMcgxdtp9gapB1+kENOcdQWOsLppiNXdxME
-66R5lPPx3ZaEwGoc6fIbehpsER5FbFtwLu838D2qzz2v8D8VTZBaFpeseUAy0zNm
-3l/kKzPnL4kGRdiEF/EdsJIOSpJEbaVJuekysjBXPr+nTLcO+/zYfuUo3j+7QTSU
-4UKs5XoZ3lXiPlc++5hWH3HFBvIaUZOMVS+W+QIDAQABAoIBAACWaVBx044xkCze
-a1KfcdUQTcpy8KWBaNif7aT31JnxolppWlCfHPT4f6J7Cp0lZJfo2zaCCKGXhQxo
-Nd74jRVVf85I20RVW2GjxFdIxERG9hQbNN8Wu/MS3EykplFm4lAzSAHCy8jyePKl
-hzy8LDsjr8OLNukvI84WNoOHgfKvHIc145KdbC2mRnsS46MvnluUjEZf69Y3nTEe
-X1fO+fcZyyRhwgr9FHs1o6YGhRj/vUI6vOxAFFIsGPTxGWdMwTppJ7Tx3dL/FlTb
-RQ/ReDD1Pj7mh8vOdK1X6KFrqVQuB7Q+B6yaARBtSbhXt5BgyetbHreBqmwjVERw
-HDASKKcCgYEA5uON5mMUIe1YZedNURLP6k0R5YI2iOqbIXK0pRR/v2HiIsvZxrpJ
-b/iHz12Uk+g7RUCp1NsOyla4Wb8DVQVU6wLb6FXsoboz4T76it/rJbPn0+HMtekP
-1z1UHyZ6z9FndLMLW9oPdftgbpHFYumcDGI9HA2ZGa6R
-owsg7uEZdlhe3IO1Ovc6Qclca+Sq9UOaeRhFPXWB9PYx8BMz1bEd
+...
 -----END RSA PRIVATE KEY-----'
 
-
-
-# add_vps \
-# "vps1" \
-# "root" \
-# "1.2.3.4" \
-# 'PASTE YOUR RSA KEY'
-
+# ==========================================
+# VPS 2 (password-based)
+# ==========================================
+add_vps \
+"instance2" \
+"stahseen" \
+"s10.serv00.com" \
+"" \
+"LJ4yZ!&LXD8uQl$YKzH("
 
 # ==========================================
 # SHOW ALL SERVERS
 # ==========================================
-
 echo ""
 echo "========================================"
 echo "ALL SSH SERVERS ON THIS UBUNTU SERVER"
