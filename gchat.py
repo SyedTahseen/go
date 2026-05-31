@@ -787,9 +787,12 @@ async def test_keys(client: Client, message: Message):
         result_text = "\n".join(result_lines)
         file_path = "gemini_test_results.txt"
         await asyncio.to_thread(_sync_write_file, file_path, result_text)
-        await send_reply(client.send_document, [message.chat.id, file_path], {"caption": "✅ Gemini API key test results", "cleanup_file": file_path}, client)
-        await send_reply(message.delete, [], {}, client)
-        file_path = None  # cleanup handled by send_reply
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=file_path,
+            caption="✅ Gemini API key test results"
+        )
+        await message.delete()
     except Exception as e:
         await client.send_message("me", f"⚠️ test command error\n{str(e)}")
     finally:
