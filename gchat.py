@@ -210,7 +210,7 @@ def build_system_instruction(bot_role):
         role_text = str(bot_role)
     return role_text
 
-def build_prompt(chat_history, user_message):
+def build_prompt(chat_history):
     timestamp = datetime.datetime.now(la_timezone).strftime("%Y-%m-%d %H:%M:%S")
     chat_context = "\n".join(chat_history)
     prompt = (
@@ -335,7 +335,7 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                 return
             bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
             chat_history = get_chat_history(user_id, "hello", user_name)
-            prompt = build_prompt(chat_history, "hello")
+            prompt = build_prompt(chat_history)
             await send_typing_action(client, message.chat.id, "hello")
             try:
                 bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
@@ -396,7 +396,7 @@ async def gchat(client: Client, message: Message):
             chat_history = get_chat_history(user_id, combined_message, user_name)
             await asyncio.sleep(random.choice([3, 5, 7]))
             await send_typing_action(client, message.chat.id, combined_message)
-            prompt = build_prompt(chat_history, combined_message)
+            prompt = build_prompt(chat_history)
             try:
                 bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=_bot_role)
                 if not bot_response:
@@ -463,8 +463,7 @@ async def handle_files(client: Client, message: Message):
                             if not sample_images:
                                 await send_reply(client.send_message, ["me", "⚠️ No valid images to process."], {}, client)
                                 return
-                            prompt_text = "User sent image(s)." + (f" Caption: {caption}" if caption else " React to the image(s) naturally, in character.")
-                            prompt = build_prompt(chat_history, prompt_text)
+                            prompt = build_prompt(chat_history)
                             input_data = [prompt] + sample_images
                             response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
                             if response and await handle_gpic_message(client, message.chat.id, response):
@@ -514,8 +513,7 @@ async def handle_files(client: Client, message: Message):
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"⚠️ upload_file_to_gemini error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
                 return
-            prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else f" React to it naturally, in character.")
-            prompt = build_prompt(chat_history, prompt_text)
+            prompt = build_prompt(chat_history)
             input_data = [prompt, uploaded_file]
             try:
                 response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
