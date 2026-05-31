@@ -107,14 +107,14 @@ async def reply_worker(client):
                 await reply_func(*args, **kwargs)
             except FloodWait as e:
                 try:
-                    await client.send_message("me", f"FloodWait: sleeping {e.value}s")
+                    await client.send_message("me", f"⚠️ FloodWait\nSleeping {e.value}s")
                 except Exception:
                     pass
                 await asyncio.sleep(e.value + 1)
                 await reply_func(*args, **kwargs)
         except Exception as e:
             try:
-                await client.send_message("me", f"Reply queue error:\n{e}")
+                await client.send_message("me", f"⚠️ Reply queue error\n{e}")
             except Exception:
                 pass
         finally:
@@ -166,7 +166,7 @@ async def handle_gpic_message(client, chat_id, bot_response):
             caption = parts[2]
         photos = await fetch_bot_pics(client)
         if not photos:
-            await send_reply(client.send_message, ["me", "No bot pictures in group/channel."], {}, client)
+            await send_reply(client.send_message, ["me", "⚠️ No bot pictures found in group/channel."], {}, client)
             return True
         selected = random.sample(photos, min(n, len(photos)))
         if len(selected) > 1:
@@ -276,7 +276,7 @@ async def send_typing_action(client, chat_id, user_message):
         await asyncio.sleep(min(len(user_message) / 10, 5))
     except Exception as e:
         try:
-            await client.send_message("me", f"send_typing_action error: {e}")
+            await client.send_message("me", f"⚠️ send_typing_action error\n{e}")
         except Exception:
             pass
         return
@@ -314,7 +314,7 @@ async def process_sticker_gif_buffer(client, user_id):
         await asyncio.sleep(random.uniform(5, 10))
         await send_reply(last_msg.reply_text, [random_smiley], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"Sticker/GIF buffer error:\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ Sticker/GIF buffer error\n{str(e)}"], {}, client)
 
 @Client.on_message(
     (filters.sticker | filters.animation) & filters.private & ~filters.me & ~filters.bot, group=1
@@ -330,7 +330,7 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
             roles = await fetch_roles()
             default_role = roles.get("default")
             if not default_role:
-                await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
+                await send_reply(client.send_message, ["me", "⚠️ 'default' role missing."], {}, client)
                 return
             bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
             chat_history = get_chat_history(user_id, "hello", user_name)
@@ -339,7 +339,7 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
             try:
                 bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
                 if not bot_response:
-                    await send_reply(client.send_message, ["me", f"Gemini returned empty response for user {user_id}\n@{message.chat.username or message.chat.id}"], {}, client)
+                    await send_reply(client.send_message, ["me", f"⚠️ Gemini empty response\n@{message.chat.username or message.chat.id}"], {}, client)
                 else:
                     if not await handle_gpic_message(client, message.chat.id, bot_response):
                         if not await handle_voice_message(client, message.chat.id, bot_response):
@@ -351,9 +351,9 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                                 await send_reply(message.reply_text, [bot_response], {}, client)
                 return
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"sticker initial gchat error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+                await send_reply(client.send_message, ["me", f"⚠️ Sticker gchat error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"sticker handler error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ Sticker handler error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
     sticker_gif_buffer[user_id].append(message)
     if sticker_gif_timer.get(user_id):
         sticker_gif_timer[user_id].cancel()
@@ -387,7 +387,7 @@ async def gchat(client: Client, message: Message):
             _roles = await fetch_roles()
             _default_role = _roles.get("default")
             if not _default_role:
-                await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
+                await send_reply(client.send_message, ["me", "⚠️ 'default' role missing."], {}, client)
                 return
             _bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or _default_role
             chat_history = get_chat_history(user_id, combined_message, user_name)
@@ -409,10 +409,10 @@ async def gchat(client: Client, message: Message):
                 else:
                     await send_reply(message.reply_text, [bot_response], {}, client)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"gchat error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+                await send_reply(client.send_message, ["me", f"⚠️ gchat error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
         client.message_timers[user_id] = asyncio.create_task(process_combined_messages())
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"gchat module error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ gchat module error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.private & ~filters.me & ~filters.bot, group=1)
 async def handle_files(client: Client, message: Message):
@@ -425,7 +425,7 @@ async def handle_files(client: Client, message: Message):
         roles = await fetch_roles()
         default_role = roles.get("default")
         if not default_role:
-            await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
+            await send_reply(client.send_message, ["me", "⚠️ 'default' role missing."], {}, client)
             return
         bot_role = db.get(settings_collection, f"custom_roles.{user_id}") or default_role
         caption = message.caption.strip() if message.caption else ""
@@ -457,7 +457,7 @@ async def handle_files(client: Client, message: Message):
                                 except Exception:
                                     continue
                             if not sample_images:
-                                await send_reply(client.send_message, ["me", "No valid images to process."], {}, client)
+                                await send_reply(client.send_message, ["me", "⚠️ No valid images to process."], {}, client)
                                 return
                             prompt_text = "User sent image(s)." + (f" Caption: {caption}" if caption else " React to the image(s) naturally, in character.")
                             prompt = build_prompt(chat_history, prompt_text)
@@ -468,7 +468,7 @@ async def handle_files(client: Client, message: Message):
                             if response and await handle_voice_message(client, message.chat.id, response):
                                 return
                             if not response:
-                                await send_reply(client.send_message, ["me", f"Empty Gemini response for images from user {user_id}\n@{message.chat.username or message.chat.id}"], {}, client)
+                                await send_reply(client.send_message, ["me", f"⚠️ Gemini empty response\n@{message.chat.username or message.chat.id}"], {}, client)
                                 return
                             if len(response) > 4000:
                                 fp = f"gchat_img_resp_{user_id}_{int(time.time())}.txt"
@@ -489,7 +489,7 @@ async def handle_files(client: Client, message: Message):
                                 except Exception:
                                     pass
                     except Exception as e:
-                        await send_reply(client.send_message, ["me", f"process_images error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+                        await send_reply(client.send_message, ["me", f"⚠️ process_images error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
                 client.image_timers[user_id] = asyncio.create_task(process_images())
             return
         file_type = None
@@ -508,7 +508,7 @@ async def handle_files(client: Client, message: Message):
             try:
                 uploaded_file = await upload_file_to_gemini(file_path, file_type)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"upload_file_to_gemini error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+                await send_reply(client.send_message, ["me", f"⚠️ upload_file_to_gemini error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
                 return
             prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else f" React to it naturally, in character.")
             prompt = build_prompt(chat_history, prompt_text)
@@ -516,14 +516,14 @@ async def handle_files(client: Client, message: Message):
             try:
                 response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"generate_gemini_response error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+                await send_reply(client.send_message, ["me", f"⚠️ generate_gemini_response error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
                 return
             if response and await handle_gpic_message(client, message.chat.id, response):
                 return
             if response and await handle_voice_message(client, message.chat.id, response):
                 return
             if not response:
-                await send_reply(client.send_message, ["me", f"Empty Gemini response for file from user {user_id}\n@{message.chat.username or message.chat.id}"], {}, client)
+                await send_reply(client.send_message, ["me", f"⚠️ Gemini empty response\n@{message.chat.username or message.chat.id}"], {}, client)
                 return
             if len(response) > 4000:
                 fp = f"gchat_file_resp_{user_id}_{int(time.time())}.txt"
@@ -532,7 +532,7 @@ async def handle_files(client: Client, message: Message):
             else:
                 await send_reply(message.reply, [response], {"reply_to_message_id": message.id}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"handle_files error:\n@{message.chat.username or message.chat.id}\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ handle_files error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
     finally:
         if file_path and os.path.exists(file_path):
             try:
@@ -645,7 +645,7 @@ async def set_gemini_key(client: Client, message: Message):
             await send_reply(message.edit_text, [menu_text], {}, client)
         await asyncio.sleep(1)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"setgchat error:\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ setgchat error\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.command(["gchat", "gc"], prefix) & filters.me)
 async def gchat_command(client: Client, message: Message):
@@ -698,14 +698,14 @@ async def gchat_command(client: Client, message: Message):
             await send_reply(message.edit_text, ["Usage: gchat [on|off|del/all|r] [user_id]"], {}, client)
         await send_reply(message.delete, [], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"gchat command error:\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ gchat command error\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.command("gswitch", prefix) & filters.me)
 async def switch_role(client: Client, message: Message):
     try:
         roles = await fetch_roles()
         if not roles:
-            await send_reply(client.send_message, ["me", "Role fetch error."], {}, client)
+            await send_reply(client.send_message, ["me", "⚠️ Role fetch error."], {}, client)
             await send_reply(message.edit_text, ["Failed to fetch roles."], {}, client)
             return
         user_id = message.chat.id
@@ -722,7 +722,7 @@ async def switch_role(client: Client, message: Message):
             await send_reply(message.edit_text, [f"Not found: {role_name}"], {}, client)
         await send_reply(message.delete, [], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"switch command error:\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ switch command error\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.command("role", prefix) & filters.me)
 async def set_custom_role(client: Client, message: Message):
@@ -730,7 +730,7 @@ async def set_custom_role(client: Client, message: Message):
         roles = await fetch_roles()
         default_role = roles.get("default")
         if not default_role:
-            await send_reply(client.send_message, ["me", "Err: 'default' role missing."], {}, client)
+            await send_reply(client.send_message, ["me", "⚠️ 'default' role missing."], {}, client)
             return
         parts = message.text.strip().split()
         user_id = message.chat.id
@@ -752,7 +752,7 @@ async def set_custom_role(client: Client, message: Message):
             await send_reply(message.edit_text, [f"<spoiler>Role set: {user_id}</spoiler>\n{custom_role}"], {}, client)
         await send_reply(message.delete, [], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"role command error:\n\n{str(e)}"], {}, client)
+        await send_reply(client.send_message, ["me", f"⚠️ role command error\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.command("test", prefix) & filters.me)
 async def test_keys(client: Client, message: Message):
@@ -793,7 +793,7 @@ async def test_keys(client: Client, message: Message):
         )
         await message.delete()
     except Exception as e:
-        await client.send_message("me", f"test command error:\n\n{str(e)}")
+        await client.send_message("me", f"⚠️ test command error\n{str(e)}")
     finally:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
