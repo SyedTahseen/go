@@ -92,6 +92,7 @@ smileys = ["-.-", "):", ":)", "*.*", ")*"]
 la_timezone = pytz.timezone("America/Los_Angeles")
 ROLES_URL = "https://gist.githubusercontent.com/iTahseen/00890d65192ca3bd9b2a62eb034b96ab/raw/roles.json"
 BOT_PIC_GROUP_ID = -1001234567890
+CHUNK_SIZE = 3800
 
 GEMINI_SEMAPHORE = asyncio.Semaphore(4)
 
@@ -348,12 +349,14 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                                 await asyncio.to_thread(_sync_write_file, fp, bot_response)
                                 await send_reply(client.send_document, [message.chat.id, fp], {"caption": "Response", "reply_to_message_id": message.id, "cleanup_file": fp}, client)
                             else:
-                                await send_reply(message.reply_text, [bot_response], {}, client)
+                                await send_reply(message.reply, [bot_response], {"reply_to_message_id": message.id}, client)
                 return
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"⚠️ Sticker gchat error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
+                return
     except Exception as e:
         await send_reply(client.send_message, ["me", f"⚠️ Sticker handler error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
+        return
     sticker_gif_buffer[user_id].append(message)
     if sticker_gif_timer.get(user_id):
         sticker_gif_timer[user_id].cancel()
@@ -397,6 +400,7 @@ async def gchat(client: Client, message: Message):
             try:
                 bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=_bot_role)
                 if not bot_response:
+                    await send_reply(client.send_message, ["me", f"⚠️ Gemini empty response\n@{message.chat.username or message.chat.id}"], {}, client)
                     return
                 if await handle_gpic_message(client, message.chat.id, bot_response):
                     return
@@ -407,7 +411,7 @@ async def gchat(client: Client, message: Message):
                     await asyncio.to_thread(_sync_write_file, fp, bot_response)
                     await send_reply(client.send_document, [message.chat.id, fp], {"caption": "Response", "reply_to_message_id": message.id, "cleanup_file": fp}, client)
                 else:
-                    await send_reply(message.reply_text, [bot_response], {}, client)
+                    await send_reply(message.reply, [bot_response], {"reply_to_message_id": message.id}, client)
             except Exception as e:
                 await send_reply(client.send_message, ["me", f"⚠️ gchat error\n@{message.chat.username or message.chat.id}\n{str(e)}"], {}, client)
         client.message_timers[user_id] = asyncio.create_task(process_combined_messages())
@@ -634,13 +638,10 @@ async def set_gemini_key(client: Client, message: Message):
             f"Voice: {voice_status}\nRole: {current_default}\n"
             f"History head: {head}, tail: {tail}"
         )
-        CHUNK_SIZE = 3800
         if len(menu_text) > CHUNK_SIZE:
             fp = f"gchat_menu_{int(time.time())}.txt"
             await asyncio.to_thread(_sync_write_file, fp, menu_text)
             await send_reply(client.send_document, [message.chat.id, fp], {"caption": "gchat menu", "cleanup_file": fp}, client)
-            await asyncio.sleep(1)
-            return
         else:
             await send_reply(message.edit_text, [menu_text], {}, client)
         await asyncio.sleep(1)
@@ -695,7 +696,7 @@ async def gchat_command(client: Client, message: Message):
                 [f"<spoiler>Removed: {user_id}</spoiler>" if changed else f"<spoiler>Not found: {user_id}</spoiler>"],
                 {}, client)
         else:
-            await send_reply(message.edit_text, ["Usage: gchat [on|off|del/all|r] [user_id]"], {}, client)
+            await send_reply(message.edit_text, ["Usage: gchat [on|off|del|all|r] [user_id]"], {}, client)
         await send_reply(message.delete, [], {}, client)
     except Exception as e:
         await send_reply(client.send_message, ["me", f"⚠️ gchat command error\n{str(e)}"], {}, client)
@@ -786,12 +787,9 @@ async def test_keys(client: Client, message: Message):
         result_text = "\n".join(result_lines)
         file_path = "gemini_test_results.txt"
         await asyncio.to_thread(_sync_write_file, file_path, result_text)
-        await client.send_document(
-            chat_id=message.chat.id,
-            document=file_path,
-            caption="✅ Gemini API key test results"
-        )
-        await message.delete()
+        await send_reply(client.send_document, [message.chat.id, file_path], {"caption": "✅ Gemini API key test results", "cleanup_file": file_path}, client)
+        await send_reply(message.delete, [], {}, client)
+        file_path = None  # cleanup handled by send_reply
     except Exception as e:
         await client.send_message("me", f"⚠️ test command error\n{str(e)}")
     finally:
@@ -801,13 +799,13 @@ async def test_keys(client: Client, message: Message):
 modules_help["gchat"] = {
     "gchat on/off/del/all/r [user_id]": "Manage gchat for users.",
     "role [user_id] <role>": "Set or reset user role.",
-    "switch": "Show or set gchat modes.",
+    "gswitch [role]": "Show or set gchat role.",
     "setgchat add/set/del <key|index>": "Manage Gemini API keys.",
     "setgchat": "Show Gemini config & status.",
     "setgchat model <name>": "Set/show Gemini model.",
     "setgchat voice": "Toggle voice reply.",
     "setgchat role <role>": "Set/show global role.",
-    "setgchat history <n>": "Set/show chat history head/tail",
+    "setgchat history <n>": "Set/show chat history head/tail.",
     "gpic [n] [caption]": "Send n pics with caption.",
-    "test": "Test Gemini keys"
+    "test": "Test Gemini keys."
 }
