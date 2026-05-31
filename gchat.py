@@ -339,7 +339,8 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
             try:
                 bot_response = await generate_gemini_response(prompt, chat_history, user_id, bot_role=bot_role)
                 if not bot_response:
-                    await send_reply(client.send_message, ["me", f"Gemini returned empty response for user {user_id}\nchat_id: {message.chat.id}"], {}, client)
+                    chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                    await send_reply(client.send_message, ["me", f"Gemini returned empty response for user {user_id}\n{chat_ref}"], {}, client)
                 else:
                     if not await handle_gpic_message(client, message.chat.id, bot_response):
                         if not await handle_voice_message(client, message.chat.id, bot_response):
@@ -351,9 +352,11 @@ async def handle_sticker_gif_buffered(client: Client, message: Message):
                                 await send_reply(message.reply_text, [bot_response], {}, client)
                 return
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"sticker initial gchat error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                await send_reply(client.send_message, ["me", f"sticker initial gchat error:\n{chat_ref}\n\n{str(e)}"], {}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"sticker handler error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+        chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+        await send_reply(client.send_message, ["me", f"sticker handler error:\n{chat_ref}\n\n{str(e)}"], {}, client)
     sticker_gif_buffer[user_id].append(message)
     if sticker_gif_timer.get(user_id):
         sticker_gif_timer[user_id].cancel()
@@ -409,10 +412,12 @@ async def gchat(client: Client, message: Message):
                 else:
                     await send_reply(message.reply_text, [bot_response], {}, client)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"gchat error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                await send_reply(client.send_message, ["me", f"gchat error:\n{chat_ref}\n\n{str(e)}"], {}, client)
         client.message_timers[user_id] = asyncio.create_task(process_combined_messages())
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"gchat module error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+        chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+        await send_reply(client.send_message, ["me", f"gchat module error:\n{chat_ref}\n\n{str(e)}"], {}, client)
 
 @Client.on_message(filters.private & ~filters.me & ~filters.bot, group=1)
 async def handle_files(client: Client, message: Message):
@@ -468,7 +473,8 @@ async def handle_files(client: Client, message: Message):
                             if response and await handle_voice_message(client, message.chat.id, response):
                                 return
                             if not response:
-                                await send_reply(client.send_message, ["me", f"Empty Gemini response for images from user {user_id}\nchat_id: {message.chat.id}"], {}, client)
+                                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                                await send_reply(client.send_message, ["me", f"Empty Gemini response for images from user {user_id}\n{chat_ref}"], {}, client)
                                 return
                             if len(response) > 4000:
                                 fp = f"gchat_img_resp_{user_id}_{int(time.time())}.txt"
@@ -489,7 +495,8 @@ async def handle_files(client: Client, message: Message):
                                 except Exception:
                                     pass
                     except Exception as e:
-                        await send_reply(client.send_message, ["me", f"process_images error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+                        chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                        await send_reply(client.send_message, ["me", f"process_images error:\n{chat_ref}\n\n{str(e)}"], {}, client)
                 client.image_timers[user_id] = asyncio.create_task(process_images())
             return
         file_type = None
@@ -508,7 +515,8 @@ async def handle_files(client: Client, message: Message):
             try:
                 uploaded_file = await upload_file_to_gemini(file_path, file_type)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"upload_file_to_gemini error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                await send_reply(client.send_message, ["me", f"upload_file_to_gemini error:\n{chat_ref}\n\n{str(e)}"], {}, client)
                 return
             prompt_text = f"User sent a {file_type}." + (f" Caption: {caption}" if caption else f" React to it naturally, in character.")
             prompt = build_prompt(chat_history, prompt_text)
@@ -516,14 +524,16 @@ async def handle_files(client: Client, message: Message):
             try:
                 response = await generate_gemini_response(input_data, chat_history, user_id, bot_role=bot_role)
             except Exception as e:
-                await send_reply(client.send_message, ["me", f"generate_gemini_response error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                await send_reply(client.send_message, ["me", f"generate_gemini_response error:\n{chat_ref}\n\n{str(e)}"], {}, client)
                 return
             if response and await handle_gpic_message(client, message.chat.id, response):
                 return
             if response and await handle_voice_message(client, message.chat.id, response):
                 return
             if not response:
-                await send_reply(client.send_message, ["me", f"Empty Gemini response for file from user {user_id}\nchat_id: {message.chat.id}"], {}, client)
+                chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+                await send_reply(client.send_message, ["me", f"Empty Gemini response for file from user {user_id}\n{chat_ref}"], {}, client)
                 return
             if len(response) > 4000:
                 fp = f"gchat_file_resp_{user_id}_{int(time.time())}.txt"
@@ -532,7 +542,8 @@ async def handle_files(client: Client, message: Message):
             else:
                 await send_reply(message.reply, [response], {"reply_to_message_id": message.id}, client)
     except Exception as e:
-        await send_reply(client.send_message, ["me", f"handle_files error:\nchat_id: {message.chat.id}\n\n{str(e)}"], {}, client)
+        chat_ref = f"@{message.chat.username}" if message.chat.username else f"chat_id: {message.chat.id}"
+        await send_reply(client.send_message, ["me", f"handle_files error:\n{chat_ref}\n\n{str(e)}"], {}, client)
     finally:
         if file_path and os.path.exists(file_path):
             try:
